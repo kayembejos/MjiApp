@@ -1,12 +1,14 @@
 import { MDCDialog } from "@material/dialog";
-import { initializeApp } from "firebase/app";
+import { initializeApp, firebase } from "firebase/app";
+import { firestore } from "firebase/firestore";
 import { 
   Timestamp,
   addDoc, 
   collection, 
   collectionGroup, 
   deleteDoc, 
-  doc, 
+  doc,
+  setFirestoreSettings, 
   getDoc, 
   getFirestore, 
   limit, 
@@ -16,7 +18,11 @@ import {
   serverTimestamp,
   setDoc, 
   updateDoc, 
-  where,} from "firebase/firestore";
+  where,
+  initializeFirestore, 
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 
   import {
     getAuth,
@@ -32,6 +38,15 @@ import {
     linkWithRedirect,
   } from "firebase/auth";  
 
+  import {
+    deleteObject,
+    getDownloadURL,
+    getStorage,
+    ref,
+    uploadBytes,
+  } from "firebase/storage";
+  
+
 const firebaseConfig = {
   apiKey: "AIzaSyCW3FifVTG8MOxDUkWrTjj_trIjOG6iBbw",
   authDomain: "practice-firebase-58d8a.firebaseapp.com",
@@ -45,8 +60,16 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 // initialisation de services Firebase
-const db = getFirestore(app);
 const auth = getAuth(app);
+
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
+
+const storage = getStorage();
+
 
 // Référence de la collection
 const citiesRef = collectionGroup(db, "villes");
@@ -57,7 +80,7 @@ const newUser = ({ email, uid }) => {
   const userRef = doc(db, "utilisateurs", uid);
   setDoc(userRef, { email, uid }, { merge: true });
 };
-
+let cityImgUrl = "";
 const addCityForm = document.querySelector(".set-city");
 const setCityForm = async (docCityID, dialog) => {
   //Ajouter document "ville" dans une sous-collection de la collection "utilisateurs"
@@ -83,6 +106,7 @@ const setCityForm = async (docCityID, dialog) => {
       ville,
       population,
       capital,
+      cityImgUrl,
       dateDajout: serverTimestamp(),
       user: {
         email: user.email,
@@ -116,7 +140,11 @@ const cityItemContainer = document.querySelector(".city-item-container");
 let villes = [];
 
 onSnapshot(citiesQuery, (snapshot) => {
-  villes = snapshot.docs.map((d) => d.data());
+  villes = snapshot.docs.map((d) => {
+    const isOffLine = d.metadata.hasPendingWrites;
+    return { isOffLine, ...d.data() };
+  });
+
   let city = "";
 
   villes.forEach((ville) => {
@@ -124,6 +152,15 @@ onSnapshot(citiesQuery, (snapshot) => {
     <a class="city-card mdc-card mdc-card--outlined" href="detail.html?data=${
       ville.cityID
     }" style="opacity: ${ville.isOffLine === true ? "0.5" : "1"}">
+
+    ${
+      ville.cityImgUrl
+        ? `<img
+          src="${ville.cityImgUrl}"
+          class="image-thubnail"
+        />`
+        : ""
+    }
     
     <h1 class="city-title">${ville.ville}</h1>
           <h4 class="city-country">${
@@ -146,11 +183,79 @@ onSnapshot(citiesQuery, (snapshot) => {
 
 });
 
+//téléchargement de l'image vers Cloud Storage
+const uploadImgToStorage = async (file) => {
+  const filePath = `images/${Date.now()}`;
+  const pathReference = ref(storage, filePath);
+  const uploadTask = await uploadBytes(pathReference, file);
+  window.localStorage.setItem("pathReference", uploadTask.ref.fullPath);
+  return await getDownloadURL(pathReference);
+};
+
+const isOnline = async () => {
+  try {
+    await fetch("https://jsonplaceholder.typicode.com/todos/1");
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+const ImgSection = document.querySelector(".image-section");
+
+const submitBtn = document.querySelector(".submit-btn");
+const imgProcessIndicator = document.querySelector(".img-progress-indicator");
+const imagePreview = document.querySelector(".image-preview");
+const inputImage = document.querySelector(".image-input");
+imgProcessIndicator.style.display = "none";
+imagePreview.style.display = "none";
+
+inputImage.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  submitBtn.disabled = true;
+
+try {
+  if (cityImgUrl) await deleteImgToStorage();
+  imgProcessIndicator.style.display = "";
+  cityImgUrl = await uploadImgToStorage(file);
+  imagePreview.style.display = "";
+  imgProcessIndicator.style.display = "none";
+  imagePreview.setAttribute("src", cityImgUrl);
+  submitBtn.disabled = false;
+} catch (error) {
+  cityImgUrl = "";
+  imgProcessIndicator.innerHTML = "Une erreur s'est produite";
+  submitBtn.disabled = false;
+}
+});
+
+//Suppression de l'image dans cloud Storage
+const deleteImgToStorage = async () => { 
+  const pathReference = window.localStorage.getItem("pathReference");
+  const fileRef = ref(storage, pathReference);
+  imgProcessIndicator.style.display = "";
+  imagePreview.style.display = "none";
+  addCityForm.reset();
+  return await deleteObject(fileRef);
+};
+
 if (!window.location.search.replace("?data=", "")){
   //page acceuil
   const dialog = new MDCDialog(document.querySelector('.mdc-dialog'));
   const addBtn = document.querySelector(".addBtn");
   addBtn.addEventListener("click", () => dialog.open());
+
+  dialog.listen("MDCDialog:opened", async () => {
+    const hasConnection = await isOnline();
+    hasConnection
+      ? (ImgSection.style.display = "")
+      : (ImgSection.style.display = "none");
+  });
+
+  const cancelBtn = document.querySelector(".cancel-btn");
+  cancelBtn.addEventListener("click", async () => {
+    if (cityImgUrl) await deleteImgToStorage();
+  });
 
   setCityForm ("nouvelle-ville", dialog);
 
@@ -209,6 +314,14 @@ signInGoogleBtn.addEventListener("click", () => {
     const cityItemContainer = document.querySelector(".city-card");
 
     cityItemContainer.innerHTML = `
+    ${
+      villes[0].cityImgUrl
+        ? `<a href="${villes[0].cityImgUrl}"><img
+          src="${villes[0].cityImgUrl}"
+          class="image-thubnail"
+        /><a/>`
+        : ""
+    }
         <h1 class="city-title">${villes[0].ville}</h1>
         <h4 class="city-country">${
           villes[0].capital === true ? "La capitale de " : "Pays: "
@@ -243,6 +356,7 @@ signInGoogleBtn.addEventListener("click", () => {
     //Modification de la ville
     editBtn.addEventListener("click", () => {
       setCityForm(cityID);
+      imagePreview.style.display = "none";
     });
   })
 
@@ -267,12 +381,15 @@ onAuthStateChanged(auth, async (user) => {
     isLogOut.style.display = "none";
     userEmail.innerHTML = `${user.email}`;
 
+    //suppression d'un doc 
+   deleteCityDoc(user.uid);
+
     //ajout de nouveau utilisateur dans la bdd
     const userDocRef = doc(db, "utilisateurs", `${user.uid}`);
     const userDoc = await getDoc(userDocRef);
     if (!userDoc.exists()) newUser(user);
 
-   deleteCityDoc(user.uid);
+    
   } else {
     isLogInToolBar.style.display = "none";
     isLogInHome.style.display = "none";
