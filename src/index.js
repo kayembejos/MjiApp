@@ -87,7 +87,8 @@ const setCityForm = async (docCityID, dialog) => {
   addCityForm.addEventListener("submit", (e) => {
     e.preventDefault();
 
-    const newDocID = String(addCityForm.ville.value)
+    const ville = addCityForm.ville.value;
+    const newDocID = String(ville)
       .toLocaleLowerCase() 
       .replace(/\s+/g, "");
     const cityID = docCityID === "nouvelle-ville" ? newDocID : docCityID;
@@ -96,7 +97,6 @@ const setCityForm = async (docCityID, dialog) => {
     const userCityDocRef = doc(db, usersCityRef, cityID);
 
     const pays = addCityForm.pays.value;
-    const ville = addCityForm.ville.value;
     const population = Number(addCityForm.population.value);
     const capital = addCityForm.capital.value === "true" ? true : false;
 
@@ -239,7 +239,10 @@ const deleteImgToStorage = async () => {
   return await deleteObject(fileRef);
 };
 
-if (!window.location.search.replace("?data=", "")){
+if (
+  !window.location.search.replace("?data=", "") ||
+  location.href.includes("?apiKey=")
+  ){
   //page acceuil
   const dialog = new MDCDialog(document.querySelector('.mdc-dialog'));
   const addBtn = document.querySelector(".addBtn");
